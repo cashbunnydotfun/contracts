@@ -258,4 +258,27 @@ contract BEP20 is Context, IBEP20, IBEP20Metadata {
         _allowances[owner][spender] = amount;
         emit Approval(owner, spender, amount);
     }
+
+    /**
+    * @dev Destroys `amount` tokens from `account`, reducing the
+    * total supply.
+    *
+    * Emits a {Transfer} event with `to` set to the zero address.
+    *
+    * Requirements:
+    *
+    * - `account` cannot be the zero address.
+    * - `account` must have at least `amount` tokens.
+    */
+    function _burn(address account, uint256 amount) internal virtual {
+        require(account != address(0), "BEP20: burn from the zero address");
+
+        uint256 accountBalance = _balances[account];
+        require(accountBalance >= amount, "BEP20: burn amount exceeds balance");
+        _balances[account] = accountBalance - amount;
+        _totalSupply -= amount;
+
+        emit Transfer(account, address(0), amount);
+    }
+
 }

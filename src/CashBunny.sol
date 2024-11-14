@@ -1,4 +1,4 @@
-//SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
 import "./abstract/Ownable.sol";
@@ -13,20 +13,14 @@ contract CashBunny is BEP20, Ownable {
     IRouter private router;
     address private pair;
     bool private _interlock = false;
+    address[5] public internalWallets;
+    address public raffleContract;
+    bool initialized = false;
+    uint256 defaultTax;
 
-    address public marketingWallet = 0x000000000000000000000000000000000000dEaD;
-    address public constant deadWallet = 0x000000000000000000000000000000000000dEaD;
-
-    struct Taxes {
-        uint256 marketing;
-        uint256 liquidity;
-        uint256 burn;
-    }
-
-    Taxes public buytaxes = Taxes(1, 0, 1);
-    Taxes public sellTaxes = Taxes(2, 2, 0); 
-
-    modifier lockTheSwap() {
+    /// @dev Modifier to prevent reentrancy attacks during swapping operations.
+    modifier lockTheSwap {
+        /// @notice Ensures that swap functions can only be called once at a time to prevent reentrancy.
         if (!_interlock) {
             _interlock = true;
             _;
@@ -34,19 +28,38 @@ contract CashBunny is BEP20, Ownable {
         }
     }
 
-    constructor() BEP20("CashBunny", "BUNNY") {
-        _tokengeneration(msg.sender, 15000000000 * 10**decimals());
-        IRouter _router = IRouter(0x10ED43C718714eb63d5aA57B78B54704E256024E);
+    /// @param _pancakeswap_router Address of the PancakeSwap router
+    /// @param _initialSupply Initial token supply to mint
+    /// @param _internalWallets Array of addresses that will receive fees
+    /// @dev Constructor for initializing the contract with necessary parameters, creating token, and setting up pair on PancakeSwap.
+    constructor(
+        address _pancakeswap_router, 
+        uint256 _initialSupply,
+        address[5] memory _internalWallets
+    ) BEP20("CashBunny", "BUNNY") Ownable() {
+        _tokengeneration(msg.sender, _initialSupply * 10**decimals());
+        IRouter _router = IRouter(_pancakeswap_router);
         address _pair = IFactory(_router.factory()).createPair(address(this), _router.WETH());
+        internalWallets = _internalWallets;
+        raffleContract = address(0);
         router = _router;
         pair = _pair;
     }
-    
+
+    /// @dev Approves `spender` to transfer up to `amount` tokens from the caller's account.
+    /// @param spender The address which will transfer the tokens.
+    /// @param amount The amount of tokens to approve for transfer.
+    /// @return bool True if the operation was successful.
     function approve(address spender, uint256 amount) public override returns (bool) {
         _approve(_msgSender(), spender, amount);
         return true;
     }
 
+    /// @dev Transfers `amount` tokens from `sender` to `recipient` using the allowance mechanism.
+    /// @param sender Address from which tokens are transferred.
+    /// @param recipient Address to which tokens are transferred.
+    /// @param amount The amount of tokens to transfer.
+    /// @return bool True if the operation was successful.
     function transferFrom(
         address sender,
         address recipient,
@@ -61,20 +74,20 @@ contract CashBunny is BEP20, Ownable {
         return true;
     }
 
-    function increaseAllowance(address spender, uint256 addedValue)
-        public
-        override
-        returns (bool)
-    {
+    /// @dev Increases the allowance of another address to spend tokens on behalf of the caller.
+    /// @param spender The address which will spend the tokens.
+    /// @param addedValue The amount by which the allowance will be increased.
+    /// @return bool True if the operation was successful.
+    function increaseAllowance(address spender, uint256 addedValue) public override returns (bool) {
         _approve(_msgSender(), spender, _allowances[_msgSender()][spender] + addedValue);
         return true;
     }
 
-    function decreaseAllowance(address spender, uint256 subtractedValue)
-        public
-        override
-        returns (bool)
-    {
+    /// @dev Decreases the allowance of another address to spend tokens on behalf of the caller.
+    /// @param spender The address which will spend the tokens.
+    /// @param subtractedValue The amount by which the allowance will be decreased.
+    /// @return bool True if the operation was successful.
+    function decreaseAllowance(address spender, uint256 subtractedValue) public override returns (bool) {
         uint256 currentAllowance = _allowances[_msgSender()][spender];
         require(currentAllowance >= subtractedValue, "BEP20: decreased allowance below zero");
         _approve(_msgSender(), spender, currentAllowance - subtractedValue);
@@ -82,78 +95,78 @@ contract CashBunny is BEP20, Ownable {
         return true;
     }
 
+    /// @dev Transfers `amount` tokens from the caller to `recipient`.
+    /// @param recipient The address to transfer to.
+    /// @param amount The amount of tokens to transfer.
+    /// @return bool True if the transfer was successful.
     function transfer(address recipient, uint256 amount) public override returns (bool) {
         _transfer(msg.sender, recipient, amount);
         return true;
     }
 
+    /// @dev Internal transfer function handling token transfers with fee application.
+    /// @param sender The address transferring tokens.
+    /// @param recipient The address receiving tokens.
+    /// @param amount The amount of tokens to transfer.
     function _transfer(address sender, address recipient, uint256 amount) internal override {
         require(amount > 0, "Transfer amount must be greater than zero");
 
         uint256 feeswap;
-        uint256 feesum;
         uint256 fee;
-        Taxes memory currentTaxes;
 
-        if (_interlock)
-            fee = 0;
-
-        else if (recipient == pair) {
-            feeswap = sellTaxes.liquidity + sellTaxes.marketing;
-            feesum = feeswap + sellTaxes.burn;
-            currentTaxes = sellTaxes;
-        } else if (recipient != pair) {
-            feeswap = buytaxes.liquidity + buytaxes.marketing;
-            feesum = feeswap + buytaxes.burn;
-            currentTaxes = buytaxes;
+        if (_interlock) {
+            fee = 0; // No fee if already in the swap lock
         }
+        
+        fee = (amount * feeswap) / 100;
 
-        fee = (amount * feesum) / 100;
-
-        //rest to recipient
+        //send to recipient
         super._transfer(sender, recipient, amount - fee);
         if (fee > 0) {
-            //send the fee to the marketing Wallet
-            if (feeswap > 0) {
-                uint256 feeAmount = (amount * feeswap) / 100 ;
-                super._transfer(sender, marketingWallet, feeAmount);
-            }
-             //send burn fee
-            if (currentTaxes.burn > 0) {
-                uint256 burnAmount = (currentTaxes.burn * amount) / 100;
-                uint256 individualShare = burnAmount / 4;
-                for (uint256 i=0; i<4; i++) {
-                    super._transfer(sender, marketingWallet, individualShare);
+            //send the fee to the internal wallets including the raffle contract
+            if (defaultTax > 0) {
+                uint256 feeAmount = (amount * defaultTax) / 100;
+                uint256 individualShare = 0;
+                if (raffleContract == address(0)) {
+                    individualShare = feeAmount / internalWallets.length;
+                    for (uint256 i=0; i<internalWallets.length; i++) {
+                        super._transfer(sender, internalWallets[i], individualShare);
+                    }
+                } else {
+                    individualShare = feeAmount / (internalWallets.length + 1);
+                    for (uint256 i=0; i<internalWallets.length; i++) {
+                        super._transfer(sender, internalWallets[i], individualShare);
+                    }
+                    super._transfer(sender, raffleContract, individualShare);
                 }
             }
-
         }
     }
 
-    function swapTokensForETH(uint256 tokenAmount) private {
-        address[] memory path = new address[](2);
-        path[0] = address(this);
-        path[1] = router.WETH();
-        _approve(address(this), address(router), tokenAmount);
-        router.swapExactTokensForETHSupportingFeeOnTransferTokens(
-            tokenAmount,
-            0,
-            path,
-            address(this),
-            block.timestamp
-        );
+    /// @dev Burns a specific amount of tokens from an account, reducing the total supply.
+    /// @param account The account whose tokens will be burnt.
+    /// @param amount The amount of tokens to burn.
+    /// @return bool True if the burn was successful.
+    function burnFrom(address account, uint256 amount) public virtual returns (bool) {
+        uint256 currentAllowance = _allowances[account][_msgSender()];
+        require(currentAllowance >= amount, "BEP20: burn amount exceeds allowance");
+
+        // Decrease allowance and burn tokens
+        _approve(account, _msgSender(), currentAllowance - amount);
+        _burn(account, amount);
+
+        return true;
     }
 
-
-    function rescueBNB(uint256 weiAmount) external {
-        payable(owner()).transfer(weiAmount);
+    /// @dev Sets the address of the raffle contract, initializes the contract, and renounces ownership.
+    /// @param _raffleContract The address of the raffle contract.
+    function setRaffleContract(address _raffleContract) external onlyOwner {
+        require(_raffleContract != address(0), "invalid address");
+        raffleContract = _raffleContract;
+        initialized = true;
+        renounceOwnership(); // Once set, ownership is renounced to prevent further changes
     }
 
-    function rescueBEP20(address tokenAdd, uint256 amount) external onlyOwner {
-       require(tokenAdd != address(this), "Owner can't claim contract's balance of its own tokens");
-        IBEP20(tokenAdd).transfer(owner(), amount);
-    }
-
-    // fallbacks
+    /// @dev Fallback function to receive ETH.
     receive() external payable {}
 }
