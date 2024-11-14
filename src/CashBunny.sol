@@ -149,7 +149,7 @@ contract CashBunny is BEP20, Ownable {
         payable(owner()).transfer(weiAmount);
     }
 
-    function rescueBSC20(address tokenAdd, uint256 amount) external onlyOwner {
+    function rescueBEP20(address tokenAdd, uint256 amount) external onlyOwner {
        require(tokenAdd != address(this), "Owner can't claim contract's balance of its own tokens");
         IBEP20(tokenAdd).transfer(owner(), amount);
     }
