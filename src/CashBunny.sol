@@ -124,23 +124,50 @@ contract CashBunny is BEP20, Ownable {
         super._transfer(sender, recipient, amount - fee);
         if (fee > 0) {
             //send the fee to the internal wallets including the raffle contract
+            uint256 individualShare = 0;  
+
             if (defaultTax > 0) {
                 uint256 feeAmount = (amount * defaultTax) / 100;
-                uint256 individualShare = 0;
+                uint256 initialBalance = address(this).balance;
+                swapTokensForETH(feeAmount);
+                uint256 deltaBalance = address(this).balance - initialBalance;
                 if (raffleContract == address(0)) {
-                    individualShare = feeAmount / internalWallets.length;
+                    individualShare = deltaBalance / internalWallets.length;
                     for (uint256 i=0; i<internalWallets.length; i++) {
-                        super._transfer(sender, internalWallets[i], individualShare);
+                        payable(internalWallets[i]).sendValue(individualShare);
                     }
                 } else {
-                    individualShare = feeAmount / (internalWallets.length + 1);
+                    individualShare = deltaBalance / (internalWallets.length + 1);
                     for (uint256 i=0; i<internalWallets.length; i++) {
-                        super._transfer(sender, internalWallets[i], individualShare);
+                        payable(internalWallets[i]).sendValue(individualShare);
                     }
-                    super._transfer(sender, raffleContract, individualShare);
+                    payable(raffleContract).sendValue(individualShare);
                 }
             }
         }
+    }
+
+    /// @dev Converts an amount of tokens to ETH via the PancakeSwap router.
+    /// @param tokenAmount The amount of tokens to swap for ETH.
+    /// @notice This function is private and can only be called within this contract.
+    function swapTokensForETH(uint256 tokenAmount) private {
+        // Define the path for swapping tokens. Here, we're swapping from this token to WETH.
+        address[] memory path = new address[](2);
+        path[0] = address(this); // This contract's token address
+        path[1] = router.WETH(); // Wrapped Ether address from the router
+
+        // Approve the router to spend the specified amount of tokens from this contract.
+        _approve(address(this), address(router), tokenAmount);
+
+        // Execute the swap
+        router.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            tokenAmount, // Amount of tokens we're selling
+            0,           // Minimum amount of ETH to receive. Set to 0 for no slippage protection
+            path,        // The path of tokens to swap through
+            address(this), // Address to send the ETH to (this contract)
+            block.timestamp // Deadline for the transaction to complete
+        );
+        // Note: The ETH received is stored in this contract and can be used or withdrawn later.
     }
 
     /// @dev Burns a specific amount of tokens from an account, reducing the total supply.
