@@ -108,7 +108,7 @@ contract CashBunny is BEP20, Ownable {
     /// @param sender The address transferring tokens.
     /// @param recipient The address receiving tokens.
     /// @param amount The amount of tokens to transfer.
-    function _transfer(address sender, address recipient, uint256 amount) internal override {
+    function _transfer(address sender, address recipient, uint256 amount) internal override  {
         require(amount > 0, "Transfer amount must be greater than zero");
 
         uint256 feeswap;
@@ -116,34 +116,42 @@ contract CashBunny is BEP20, Ownable {
 
         if (_interlock) {
             fee = 0; // No fee if already in the swap lock
+        } else {
+            fee = (amount * feeswap) / 100;
         }
         
-        fee = (amount * feeswap) / 100;
-
         //send to recipient
         super._transfer(sender, recipient, amount - fee);
         if (fee > 0) {
             //send the fee to the internal wallets including the raffle contract
-            uint256 individualShare = 0;  
-
             if (defaultTax > 0) {
                 uint256 feeAmount = (amount * defaultTax) / 100;
-                uint256 initialBalance = address(this).balance;
-                swapTokensForETH(feeAmount);
-                uint256 deltaBalance = address(this).balance - initialBalance;
-                if (raffleContract == address(0)) {
-                    individualShare = deltaBalance / internalWallets.length;
-                    for (uint256 i=0; i<internalWallets.length; i++) {
-                        payable(internalWallets[i]).sendValue(individualShare);
-                    }
-                } else {
-                    individualShare = deltaBalance / (internalWallets.length + 1);
-                    for (uint256 i=0; i<internalWallets.length; i++) {
-                        payable(internalWallets[i]).sendValue(individualShare);
-                    }
-                    payable(raffleContract).sendValue(individualShare);
-                }
+                _swapFeesAndTransfer(feeAmount);
             }
+        }
+    }
+
+    /// @dev Internal function to swap token fees for ETH and distribute the ETH to internal wallets or raffle contract.
+    /// @param _feeAmount The amount of tokens to be swapped for ETH to cover fees.
+    function _swapFeesAndTransfer(uint256 _feeAmount) internal lockTheSwap {
+        uint256 individualShare = 0;  
+        uint256 initialBalance = address(this).balance;
+        swapTokensForETH(_feeAmount);
+        uint256 deltaBalance = address(this).balance - initialBalance;
+        
+        if (raffleContract == address(0)) {
+            /// Distribute ETH only among internal wallets when no raffle contract is set.
+            individualShare = deltaBalance / internalWallets.length;
+            for (uint256 i=0; i<internalWallets.length; i++) {
+                payable(internalWallets[i]).sendValue(individualShare);
+            }
+        } else {
+            /// Distribute ETH between internal wallets and the raffle contract.
+            individualShare = deltaBalance / (internalWallets.length + 1);
+            for (uint256 i=0; i<internalWallets.length; i++) {
+                payable(internalWallets[i]).sendValue(individualShare);
+            }
+            payable(raffleContract).sendValue(individualShare);
         }
     }
 
@@ -167,7 +175,6 @@ contract CashBunny is BEP20, Ownable {
             address(this), // Address to send the ETH to (this contract)
             block.timestamp // Deadline for the transaction to complete
         );
-        // Note: The ETH received is stored in this contract and can be used or withdrawn later.
     }
 
     /// @dev Burns a specific amount of tokens from an account, reducing the total supply.
