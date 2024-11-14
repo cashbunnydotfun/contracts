@@ -42,6 +42,7 @@ contract CashBunny is BEP20, Ownable {
         address _pair = IFactory(_router.factory()).createPair(address(this), _router.WETH());
         internalWallets = _internalWallets;
         raffleContract = address(0);
+        defaultTax = 1;
         router = _router;
         pair = _pair;
     }
@@ -111,22 +112,17 @@ contract CashBunny is BEP20, Ownable {
     function _transfer(address sender, address recipient, uint256 amount) internal override  {
         require(amount > 0, "Transfer amount must be greater than zero");
 
-        uint256 feeswap;
         uint256 fee;
 
         if (_interlock) {
             fee = 0; // No fee if already in the swap lock
-        } else {
-            fee = (amount * feeswap) / 100;
-        }
-        
-        //send to recipient
-        super._transfer(sender, recipient, amount - fee);
-        if (fee > 0) {
-            //send the fee to the internal wallets including the raffle contract
-            if (defaultTax > 0) {
-                uint256 feeAmount = (amount * defaultTax) / 100;
-                _swapFeesAndTransfer(feeAmount);
+        } else if (sender != pair) {
+            fee = (amount * defaultTax) / 100;
+            //send to recipient
+            super._transfer(sender, recipient, amount - fee);
+            if (fee > 0) {
+                //swap and send the fee to the internal wallets including the raffle contract
+                _swapFeesAndTransfer(fee);
             }
         }
     }
